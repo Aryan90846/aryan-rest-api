@@ -1,10 +1,14 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
 /* Middleware */
 app.use(express.json());
+
+/* User Routes */
+app.use("/api", userRoutes);
 
 /* MongoDB Connection */
 mongoose.connect(process.env.MONGO_URI)
