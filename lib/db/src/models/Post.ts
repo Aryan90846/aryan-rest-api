@@ -44,7 +44,6 @@ const PostSchema = new Schema<IPost>(
   }
 );
 
-PostSchema.index({ slug: 1 });
 PostSchema.index({ status: 1 });
 PostSchema.index({ authorId: 1 });
 PostSchema.index({ category: 1 });
