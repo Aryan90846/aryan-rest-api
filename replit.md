@@ -1,131 +1,181 @@
-# Backend REST API — Node.js + Express + PostgreSQL
+# Backend REST API — Node.js, Express & MongoDB
+
+**Author:** Aryan  
+**Stack:** Node.js · TypeScript · Express 5 · MongoDB · Mongoose · Zod
+
+---
 
 ## Project Overview
 
-A professional, production-ready REST API backend built with Node.js, Express, and PostgreSQL. Implements full CRUD operations for users, posts, and comments with pagination, search, filtering, sorting, structured error handling, and Zod input validation. Designed with a scalable monorepo architecture.
+A production-ready REST API backend demonstrating professional backend engineering skills. Built from the ground up with a scalable monorepo architecture, contract-first API design, and comprehensive CRUD operations for a multi-resource domain (users, posts, comments).
+
+---
 
 ## Tech Stack
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API contract**: OpenAPI 3.1 spec + Orval codegen
-- **Build**: esbuild (CJS bundle)
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 24 |
+| Language | TypeScript 5.9 (strict) |
+| Framework | Express 5 |
+| Database | MongoDB (Mongoose ODM) |
+| Validation | Zod v4 |
+| API Contract | OpenAPI 3.1 |
+| Monorepo | pnpm workspaces |
+| Build | esbuild |
+
+---
 
 ## Architecture
 
-```text
-artifacts-monorepo/
+```
+rest-api/
 ├── artifacts/
 │   └── api-server/              # Express REST API server
 │       └── src/
-│           ├── app.ts           # Express app setup + error handler
+│           ├── app.ts           # Express app + MongoDB connection bootstrap
 │           ├── index.ts         # Entry point (reads PORT, starts server)
 │           ├── lib/
-│           │   ├── errors.ts    # AppError class + error handler middleware
-│           │   ├── pagination.ts # Pagination helpers
-│           │   └── slugify.ts   # URL slug generator
+│           │   ├── errors.ts    # AppError class + centralized error handler
+│           │   ├── pagination.ts # Reusable pagination helpers
+│           │   └── slugify.ts   # URL-safe slug generator
 │           └── routes/
 │               ├── index.ts     # Router registration
-│               ├── health.ts    # GET /api/healthz
-│               ├── users.ts     # CRUD /api/users
-│               ├── posts.ts     # CRUD /api/posts
-│               └── comments.ts  # CRUD /api/posts/:id/comments, /api/comments/:id
+│               ├── health.ts    # GET /api/healthz (includes DB status)
+│               ├── users.ts     # Full CRUD /api/users
+│               ├── posts.ts     # Full CRUD /api/posts
+│               └── comments.ts  # CRUD /api/posts/:id/comments
 ├── lib/
-│   ├── api-spec/openapi.yaml    # OpenAPI 3.1 source of truth
-│   ├── api-zod/                 # Generated Zod validators (from codegen)
-│   ├── api-client-react/        # Generated React Query hooks (from codegen)
+│   ├── api-spec/openapi.yaml    # OpenAPI 3.1 — single source of truth
+│   ├── api-zod/                 # Auto-generated Zod validators
+│   ├── api-client-react/        # Auto-generated React Query hooks
 │   └── db/
-│       └── src/schema/
-│           ├── users.ts         # Users table + Zod schemas
-│           ├── posts.ts         # Posts table + Zod schemas
-│           └── comments.ts      # Comments table + Zod schemas
+│       └── src/
+│           ├── index.ts         # connectDB() + model re-exports
+│           └── models/
+│               ├── User.ts      # Mongoose schema, model, Zod schemas
+│               ├── Post.ts      # Mongoose schema, model, Zod schemas
+│               └── Comment.ts   # Mongoose schema, model, Zod schemas
 ```
+
+---
 
 ## API Endpoints
 
 ### Health
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/healthz` | Server health + uptime |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/healthz` | Server health + MongoDB connection status + uptime |
 
 ### Users
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/users` | List users (pagination, search, role filter) |
-| POST | `/api/users` | Create user |
-| GET | `/api/users/:id` | Get user by ID (includes post count) |
-| PUT | `/api/users/:id` | Update user |
-| DELETE | `/api/users/:id` | Soft-delete user (sets isActive=false) |
-| GET | `/api/users/:id/posts` | Get all posts by a user |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/users` | List users with pagination, search, role filter |
+| `POST` | `/api/users` | Create a new user |
+| `GET` | `/api/users/:id` | Get user by ID (includes post count) |
+| `PUT` | `/api/users/:id` | Update user fields |
+| `DELETE` | `/api/users/:id` | Soft-delete (sets `isActive: false`) |
+| `GET` | `/api/users/:id/posts` | Get paginated posts authored by user |
 
 ### Posts
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/posts` | List posts (pagination, search, status/category filter, sort) |
-| POST | `/api/posts` | Create post (auto-generates URL slug) |
-| GET | `/api/posts/:id` | Get post by ID (increments view count) |
-| PUT | `/api/posts/:id` | Update post |
-| DELETE | `/api/posts/:id` | Hard-delete post |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/posts` | List posts with pagination, search, filter, sort |
+| `POST` | `/api/posts` | Create post (auto-generates URL slug) |
+| `GET` | `/api/posts/:id` | Get post by ID (auto-increments view count) |
+| `PUT` | `/api/posts/:id` | Update post |
+| `DELETE` | `/api/posts/:id` | Delete post + cascades to its comments |
 
 ### Comments
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/posts/:id/comments` | Get comments for a post |
-| POST | `/api/posts/:id/comments` | Add comment to post |
-| PUT | `/api/comments/:id` | Update comment |
-| DELETE | `/api/comments/:id` | Delete comment |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/posts/:id/comments` | Get paginated comments for a post |
+| `POST` | `/api/posts/:id/comments` | Add comment to post |
+| `PUT` | `/api/comments/:id` | Update comment |
+| `DELETE` | `/api/comments/:id` | Delete comment |
+
+---
 
 ## Key Features
 
-- **Full CRUD** for Users, Posts, Comments
-- **Pagination** on all list endpoints with meta (total, pages, hasNext, hasPrev)
-- **Search** by name/email (users) and title/content (posts)
-- **Filtering** by role, status, category
-- **Sorting** posts by createdAt, updatedAt, title, viewCount (asc/desc)
-- **Input validation** with Zod — returns structured field-level errors
-- **Soft deletes** for users (isActive flag)
-- **Auto slug generation** for posts
-- **View count tracking** on post reads
-- **Relational queries** — posts include author, comments include author
-- **Structured error responses** — consistent `{ error, message, details }` format
-- **Role-based user system** — admin, moderator, user
+- **Full CRUD** — Users, Posts, Comments with proper HTTP status codes
+- **Pagination** — All list endpoints return `{ data, meta }` with `total`, `page`, `totalPages`, `hasNextPage`, `hasPrevPage`
+- **Search** — Regex-based search on name/email (users) and title/content (posts)
+- **Filtering** — Filter by role, post status (`draft` / `published` / `archived`), category
+- **Sorting** — Sort posts by `createdAt`, `updatedAt`, `title`, or `viewCount` in `asc`/`desc` order
+- **Validation** — Zod input validation with field-level error messages returned to the client
+- **Soft Deletes** — Users are deactivated (`isActive: false`) rather than deleted
+- **Auto Slug Generation** — URL-friendly slugs auto-generated from post titles
+- **View Count Tracking** — Post view count increments on every `GET /posts/:id`
+- **Cascade Deletes** — Deleting a post automatically deletes its comments
+- **Populate / Relations** — Posts and comments include full embedded author data
+- **Conflict Detection** — Duplicate emails return `409 Conflict`
+- **Consistent Error Format** — All errors return `{ error, message, details? }`
 
-## Database Schema
+---
 
-- **users** — id, name, email (unique), role (enum), bio, avatarUrl, isActive, timestamps
-- **posts** — id, title, slug (unique), content, excerpt, status (enum), category, tags (array), viewCount, authorId (FK), timestamps
-- **comments** — id, content, postId (FK with cascade delete), authorId (FK), timestamps
+## MongoDB Schema Design
+
+### Users Collection
+```
+{ name, email (unique, indexed), role (enum), bio, avatarUrl, isActive, timestamps }
+```
+Indexes: `email`, `role`, `{ name: "text", email: "text" }` (full-text search)
+
+### Posts Collection
+```
+{ title, slug (unique), content, excerpt, status (enum), category, tags[], viewCount, authorId (ref), timestamps }
+```
+Indexes: `slug`, `status`, `authorId`, `category`, `{ title: "text", content: "text" }`
+
+### Comments Collection
+```
+{ content, postId (ref), authorId (ref), timestamps }
+```
+Indexes: `postId`, `authorId`
+
+---
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `MONGODB_URI` | MongoDB connection string (e.g. `mongodb+srv://...`) |
+| `PORT` | Server port (assigned automatically) |
+
+---
 
 ## Development
 
 ```bash
+# Install dependencies
+pnpm install
+
 # Start the API server
 pnpm --filter @workspace/api-server run dev
 
-# Push schema changes to DB
-pnpm --filter @workspace/db run push
-
-# Regenerate API types from OpenAPI spec
+# Regenerate types from OpenAPI spec
 pnpm --filter @workspace/api-spec run codegen
 
-# Typecheck everything
+# Typecheck the entire workspace
 pnpm run typecheck
 ```
 
-## Query Examples
+---
+
+## Example Requests
 
 ```bash
-# List all published posts, sorted by views
+# Create a user
+POST /api/users
+{ "name": "Aryan", "email": "aryan@example.com", "role": "admin" }
+
+# Search published posts, sorted by views
 GET /api/posts?status=published&sortBy=viewCount&order=desc
 
-# Search users by name or email
-GET /api/users?search=alice&role=admin
+# Paginated comments on a post
+GET /api/posts/64abc123/comments?page=1&limit=20
 
-# Paginate comments
-GET /api/posts/1/comments?page=2&limit=20
+# Search users by name
+GET /api/users?search=aryan&role=admin
 ```

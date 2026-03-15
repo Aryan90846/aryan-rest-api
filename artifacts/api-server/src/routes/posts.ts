@@ -1,7 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db } from "@workspace/db";
-import { postsTable, usersTable, commentsTable, createPostSchema, updatePostSchema } from "@workspace/db/schema";
-import { eq, sql, and, count, asc, desc } from "drizzle-orm";
+import mongoose from "mongoose";
+import { Post, User, Comment, createPostSchema, updatePostSchema } from "@workspace/db";
 import { notFound, badRequest } from "../lib/errors.js";
 import { parsePagination, buildMeta } from "../lib/pagination.js";
 import { uniqueSlug } from "../lib/slugify.js";
@@ -15,76 +14,70 @@ router.get("/posts", async (req: Request, res: Response, next: NextFunction) => 
     const status = req.query["status"] as string | undefined;
     const category = req.query["category"] as string | undefined;
     const sortBy = (req.query["sortBy"] as string) || "createdAt";
-    const order = (req.query["order"] as string) || "desc";
+    const order = (req.query["order"] as string) === "asc" ? 1 : -1;
 
-    const conditions = [];
+    const filter: Record<string, unknown> = {};
 
     if (search) {
-      conditions.push(
-        sql`(${postsTable.title} ILIKE ${`%${search}%`} OR ${postsTable.content} ILIKE ${`%${search}%`})`
-      );
+      filter["$or"] = [
+        { title: { $regex: search, $options: "i" } },
+        { content: { $regex: search, $options: "i" } },
+      ];
     }
     if (status && ["draft", "published", "archived"].includes(status)) {
-      conditions.push(eq(postsTable.status, status as "draft" | "published" | "archived"));
+      filter["status"] = status;
     }
     if (category) {
-      conditions.push(eq(postsTable.category, category));
+      filter["category"] = { $regex: category, $options: "i" };
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const sortMap: Record<string, typeof postsTable.createdAt> = {
-      createdAt: postsTable.createdAt,
-      updatedAt: postsTable.updatedAt,
-      title: postsTable.title as typeof postsTable.createdAt,
-      viewCount: postsTable.viewCount as typeof postsTable.createdAt,
+    const validSortFields: Record<string, string> = {
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+      title: "title",
+      viewCount: "viewCount",
     };
+    const sortField = validSortFields[sortBy] ?? "createdAt";
 
-    const sortCol = sortMap[sortBy] ?? postsTable.createdAt;
-    const orderFn = order === "asc" ? asc : desc;
-
-    const [totalResult, posts] = await Promise.all([
-      db.select({ count: count() }).from(postsTable).where(whereClause),
-      db
-        .select({
-          id: postsTable.id,
-          title: postsTable.title,
-          slug: postsTable.slug,
-          content: postsTable.content,
-          excerpt: postsTable.excerpt,
-          status: postsTable.status,
-          category: postsTable.category,
-          tags: postsTable.tags,
-          viewCount: postsTable.viewCount,
-          authorId: postsTable.authorId,
-          createdAt: postsTable.createdAt,
-          updatedAt: postsTable.updatedAt,
-          commentCount: sql<number>`CAST(COUNT(${commentsTable.id}) AS INTEGER)`,
-          author: {
-            id: usersTable.id,
-            name: usersTable.name,
-            email: usersTable.email,
-            role: usersTable.role,
-            bio: usersTable.bio,
-            avatarUrl: usersTable.avatarUrl,
-            isActive: usersTable.isActive,
-            postCount: sql<number>`CAST(0 AS INTEGER)`,
-            createdAt: usersTable.createdAt,
-            updatedAt: usersTable.updatedAt,
-          },
-        })
-        .from(postsTable)
-        .leftJoin(usersTable, eq(postsTable.authorId, usersTable.id))
-        .leftJoin(commentsTable, eq(commentsTable.postId, postsTable.id))
-        .where(whereClause)
-        .groupBy(postsTable.id, usersTable.id)
-        .orderBy(orderFn(sortCol))
+    const [total, posts] = await Promise.all([
+      Post.countDocuments(filter),
+      Post.find(filter)
+        .populate("authorId", "name email role bio avatarUrl isActive createdAt updatedAt")
+        .sort({ [sortField]: order })
+        .skip(offset)
         .limit(limit)
-        .offset(offset),
+        .lean({ virtuals: true }),
     ]);
 
-    const total = totalResult[0]?.count ?? 0;
-    res.json({ data: posts, meta: buildMeta(total, page, limit) });
+    const postIds = posts.map((p) => p._id);
+    const commentCounts = await Comment.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
+      { $match: { postId: { $in: postIds } } },
+      { $group: { _id: "$postId", count: { $sum: 1 } } },
+    ]);
+    const commentMap = new Map(commentCounts.map((c) => [c._id.toString(), c.count]));
+
+    const data = posts.map((p) => {
+      const author = p.authorId as unknown as Record<string, unknown> | null;
+      return {
+        ...p,
+        id: p._id.toString(),
+        _id: undefined,
+        __v: undefined,
+        authorId: author && "_id" in author ? String(author["_id"]) : String(p.authorId),
+        commentCount: commentMap.get(p._id.toString()) ?? 0,
+        author: author
+          ? {
+              ...author,
+              id: String(author["_id"]),
+              _id: undefined,
+              __v: undefined,
+              postCount: 0,
+            }
+          : null,
+      };
+    });
+
+    res.json({ data, meta: buildMeta(total, page, limit) });
   } catch (err) {
     next(err);
   }
@@ -103,41 +96,36 @@ router.post("/posts", async (req: Request, res: Response, next: NextFunction) =>
 
     const { title, content, excerpt, status, category, tags, authorId } = parsed.data;
 
-    const authorExists = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.id, authorId))
-      .limit(1);
+    if (!mongoose.isValidObjectId(authorId)) throw badRequest("Invalid authorId");
 
-    if (authorExists.length === 0) throw badRequest("Author user not found");
+    const author = await User.findById(authorId).lean({ virtuals: true });
+    if (!author) throw badRequest("Author user not found");
 
     const slug = uniqueSlug(title);
 
-    const [post] = await db
-      .insert(postsTable)
-      .values({
-        title,
-        slug,
-        content,
-        excerpt: excerpt ?? null,
-        status: status ?? "draft",
-        category: category ?? null,
-        tags: tags ?? [],
-        authorId,
-      })
-      .returning();
+    const post = await Post.create({
+      title,
+      slug,
+      content,
+      excerpt: excerpt ?? null,
+      status: status ?? "draft",
+      category: category ?? null,
+      tags: tags ?? [],
+      authorId,
+    });
 
-    const [author] = await db
-      .select()
-      .from(usersTable)
-      .where(eq(usersTable.id, authorId))
-      .limit(1);
-
+    const json = post.toJSON();
     res.status(201).json({
       data: {
-        ...post,
+        ...json,
         commentCount: 0,
-        author: author ? { ...author, postCount: 0 } : null,
+        author: {
+          ...author,
+          id: author._id.toString(),
+          _id: undefined,
+          __v: undefined,
+          postCount: 0,
+        },
       },
     });
   } catch (err) {
@@ -147,52 +135,41 @@ router.post("/posts", async (req: Request, res: Response, next: NextFunction) =>
 
 router.get("/posts/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid post ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid post ID");
 
-    const [post] = await db
-      .select({
-        id: postsTable.id,
-        title: postsTable.title,
-        slug: postsTable.slug,
-        content: postsTable.content,
-        excerpt: postsTable.excerpt,
-        status: postsTable.status,
-        category: postsTable.category,
-        tags: postsTable.tags,
-        viewCount: postsTable.viewCount,
-        authorId: postsTable.authorId,
-        createdAt: postsTable.createdAt,
-        updatedAt: postsTable.updatedAt,
-        commentCount: sql<number>`CAST(COUNT(${commentsTable.id}) AS INTEGER)`,
-        author: {
-          id: usersTable.id,
-          name: usersTable.name,
-          email: usersTable.email,
-          role: usersTable.role,
-          bio: usersTable.bio,
-          avatarUrl: usersTable.avatarUrl,
-          isActive: usersTable.isActive,
-          postCount: sql<number>`CAST(0 AS INTEGER)`,
-          createdAt: usersTable.createdAt,
-          updatedAt: usersTable.updatedAt,
-        },
-      })
-      .from(postsTable)
-      .leftJoin(usersTable, eq(postsTable.authorId, usersTable.id))
-      .leftJoin(commentsTable, eq(commentsTable.postId, postsTable.id))
-      .where(eq(postsTable.id, id))
-      .groupBy(postsTable.id, usersTable.id)
-      .limit(1);
+    const post = await Post.findById(id)
+      .populate("authorId", "name email role bio avatarUrl isActive createdAt updatedAt")
+      .lean({ virtuals: true });
 
     if (!post) throw notFound("Post");
 
-    await db
-      .update(postsTable)
-      .set({ viewCount: sql`${postsTable.viewCount} + 1` })
-      .where(eq(postsTable.id, id));
+    const [commentCount] = await Promise.all([
+      Comment.countDocuments({ postId: post._id }),
+      Post.findByIdAndUpdate(id, { $inc: { viewCount: 1 } }),
+    ]);
 
-    res.json({ data: post });
+    const author = post.authorId as unknown as Record<string, unknown> | null;
+
+    res.json({
+      data: {
+        ...post,
+        id: post._id.toString(),
+        _id: undefined,
+        __v: undefined,
+        authorId: author && "_id" in author ? String(author["_id"]) : String(post.authorId),
+        commentCount,
+        author: author
+          ? {
+              ...author,
+              id: String(author["_id"]),
+              _id: undefined,
+              __v: undefined,
+              postCount: 0,
+            }
+          : null,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -200,8 +177,8 @@ router.get("/posts/:id", async (req: Request, res: Response, next: NextFunction)
 
 router.put("/posts/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid post ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid post ID");
 
     const parsed = updatePostSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -212,66 +189,43 @@ router.put("/posts/:id", async (req: Request, res: Response, next: NextFunction)
       throw badRequest("Validation failed", details);
     }
 
-    const existing = await db
-      .select({ id: postsTable.id })
-      .from(postsTable)
-      .where(eq(postsTable.id, id))
-      .limit(1);
-
-    if (existing.length === 0) throw notFound("Post");
-
-    const updates: Partial<typeof postsTable.$inferInsert> = {
-      updatedAt: new Date(),
-    };
-
-    if (parsed.data.title !== undefined) {
-      updates.title = parsed.data.title;
-      updates.slug = uniqueSlug(parsed.data.title);
+    const updates: Record<string, unknown> = { ...parsed.data };
+    if (parsed.data.title) {
+      updates["slug"] = uniqueSlug(parsed.data.title);
     }
-    if (parsed.data.content !== undefined) updates.content = parsed.data.content;
-    if (parsed.data.excerpt !== undefined) updates.excerpt = parsed.data.excerpt;
-    if (parsed.data.status !== undefined) updates.status = parsed.data.status;
-    if (parsed.data.category !== undefined) updates.category = parsed.data.category;
-    if (parsed.data.tags !== undefined) updates.tags = parsed.data.tags;
 
-    await db.update(postsTable).set(updates).where(eq(postsTable.id, id));
+    const updated = await Post.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    )
+      .populate("authorId", "name email role bio avatarUrl isActive createdAt updatedAt")
+      .lean({ virtuals: true });
 
-    const [updated] = await db
-      .select({
-        id: postsTable.id,
-        title: postsTable.title,
-        slug: postsTable.slug,
-        content: postsTable.content,
-        excerpt: postsTable.excerpt,
-        status: postsTable.status,
-        category: postsTable.category,
-        tags: postsTable.tags,
-        viewCount: postsTable.viewCount,
-        authorId: postsTable.authorId,
-        createdAt: postsTable.createdAt,
-        updatedAt: postsTable.updatedAt,
-        commentCount: sql<number>`CAST(COUNT(${commentsTable.id}) AS INTEGER)`,
-        author: {
-          id: usersTable.id,
-          name: usersTable.name,
-          email: usersTable.email,
-          role: usersTable.role,
-          bio: usersTable.bio,
-          avatarUrl: usersTable.avatarUrl,
-          isActive: usersTable.isActive,
-          postCount: sql<number>`CAST(0 AS INTEGER)`,
-          createdAt: usersTable.createdAt,
-          updatedAt: usersTable.updatedAt,
-        },
-      })
-      .from(postsTable)
-      .leftJoin(usersTable, eq(postsTable.authorId, usersTable.id))
-      .leftJoin(commentsTable, eq(commentsTable.postId, postsTable.id))
-      .where(eq(postsTable.id, id))
-      .groupBy(postsTable.id, usersTable.id)
-      .limit(1);
+    if (!updated) throw notFound("Post");
 
-    res.json({ data: updated });
+    const commentCount = await Comment.countDocuments({ postId: updated._id });
+    const author = updated.authorId as unknown as Record<string, unknown> | null;
+
+    res.json({
+      data: {
+        ...updated,
+        id: updated._id.toString(),
+        _id: undefined,
+        __v: undefined,
+        authorId: author && "_id" in author ? String(author["_id"]) : String(updated.authorId),
+        commentCount,
+        author: author
+          ? {
+              ...author,
+              id: String(author["_id"]),
+              _id: undefined,
+              __v: undefined,
+              postCount: 0,
+            }
+          : null,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -279,18 +233,13 @@ router.put("/posts/:id", async (req: Request, res: Response, next: NextFunction)
 
 router.delete("/posts/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid post ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid post ID");
 
-    const existing = await db
-      .select({ id: postsTable.id })
-      .from(postsTable)
-      .where(eq(postsTable.id, id))
-      .limit(1);
+    const post = await Post.findByIdAndDelete(id);
+    if (!post) throw notFound("Post");
 
-    if (existing.length === 0) throw notFound("Post");
-
-    await db.delete(postsTable).where(eq(postsTable.id, id));
+    await Comment.deleteMany({ postId: post._id });
 
     res.json({ message: "Post successfully deleted" });
   } catch (err) {

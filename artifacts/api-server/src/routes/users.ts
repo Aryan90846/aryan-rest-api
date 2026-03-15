@@ -1,8 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db } from "@workspace/db";
-import { usersTable, createUserSchema, updateUserSchema } from "@workspace/db/schema";
-import { eq, ilike, sql, and, count } from "drizzle-orm";
-import { postsTable } from "@workspace/db/schema";
+import mongoose from "mongoose";
+import { User, Post, createUserSchema, updateUserSchema } from "@workspace/db";
 import { notFound, conflict, badRequest } from "../lib/errors.js";
 import { parsePagination, buildMeta } from "../lib/pagination.js";
 
@@ -14,47 +12,45 @@ router.get("/users", async (req: Request, res: Response, next: NextFunction) => 
     const search = req.query["search"] as string | undefined;
     const role = req.query["role"] as string | undefined;
 
-    const conditions = [];
-    conditions.push(eq(usersTable.isActive, true));
+    const filter: Record<string, unknown> = { isActive: true };
 
     if (search) {
-      conditions.push(
-        sql`(${usersTable.name} ILIKE ${`%${search}%`} OR ${usersTable.email} ILIKE ${`%${search}%`})`
-      );
+      filter["$or"] = [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+      ];
     }
 
     if (role && ["admin", "user", "moderator"].includes(role)) {
-      conditions.push(eq(usersTable.role, role as "admin" | "user" | "moderator"));
+      filter["role"] = role;
     }
 
-    const whereClause = and(...conditions);
-
-    const [totalResult, users] = await Promise.all([
-      db.select({ count: count() }).from(usersTable).where(whereClause),
-      db
-        .select({
-          id: usersTable.id,
-          name: usersTable.name,
-          email: usersTable.email,
-          role: usersTable.role,
-          bio: usersTable.bio,
-          avatarUrl: usersTable.avatarUrl,
-          isActive: usersTable.isActive,
-          createdAt: usersTable.createdAt,
-          updatedAt: usersTable.updatedAt,
-          postCount: sql<number>`CAST(COUNT(${postsTable.id}) AS INTEGER)`,
-        })
-        .from(usersTable)
-        .leftJoin(postsTable, eq(postsTable.authorId, usersTable.id))
-        .where(whereClause)
-        .groupBy(usersTable.id)
+    const [total, users] = await Promise.all([
+      User.countDocuments(filter),
+      User.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(offset)
         .limit(limit)
-        .offset(offset),
+        .lean({ virtuals: true }),
     ]);
 
-    const total = totalResult[0]?.count ?? 0;
+    const userIds = users.map((u) => u._id);
+    const postCounts = await Post.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
+      { $match: { authorId: { $in: userIds } } },
+      { $group: { _id: "$authorId", count: { $sum: 1 } } },
+    ]);
 
-    res.json({ data: users, meta: buildMeta(total, page, limit) });
+    const countMap = new Map(postCounts.map((p) => [p._id.toString(), p.count]));
+
+    const data = users.map((u) => ({
+      ...u,
+      id: u._id.toString(),
+      _id: undefined,
+      __v: undefined,
+      postCount: countMap.get(u._id.toString()) ?? 0,
+    }));
+
+    res.json({ data, meta: buildMeta(total, page, limit) });
   } catch (err) {
     next(err);
   }
@@ -73,28 +69,19 @@ router.post("/users", async (req: Request, res: Response, next: NextFunction) =>
 
     const { name, email, role, bio, avatarUrl } = parsed.data;
 
-    const existing = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.email, email.toLowerCase()))
-      .limit(1);
+    const existing = await User.findOne({ email: email.toLowerCase() }).lean();
+    if (existing) throw conflict(`A user with email "${email}" already exists`);
 
-    if (existing.length > 0) {
-      throw conflict(`A user with email "${email}" already exists`);
-    }
+    const user = await User.create({
+      name,
+      email: email.toLowerCase(),
+      role: role ?? "user",
+      bio: bio ?? null,
+      avatarUrl: avatarUrl ?? null,
+    });
 
-    const [user] = await db
-      .insert(usersTable)
-      .values({
-        name,
-        email: email.toLowerCase(),
-        role: role ?? "user",
-        bio: bio ?? null,
-        avatarUrl: avatarUrl ?? null,
-      })
-      .returning();
-
-    res.status(201).json({ data: { ...user, postCount: 0 } });
+    const json = user.toJSON();
+    res.status(201).json({ data: { ...json, postCount: 0 } });
   } catch (err) {
     next(err);
   }
@@ -102,31 +89,23 @@ router.post("/users", async (req: Request, res: Response, next: NextFunction) =>
 
 router.get("/users/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid user ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid user ID");
 
-    const [user] = await db
-      .select({
-        id: usersTable.id,
-        name: usersTable.name,
-        email: usersTable.email,
-        role: usersTable.role,
-        bio: usersTable.bio,
-        avatarUrl: usersTable.avatarUrl,
-        isActive: usersTable.isActive,
-        createdAt: usersTable.createdAt,
-        updatedAt: usersTable.updatedAt,
-        postCount: sql<number>`CAST(COUNT(${postsTable.id}) AS INTEGER)`,
-      })
-      .from(usersTable)
-      .leftJoin(postsTable, eq(postsTable.authorId, usersTable.id))
-      .where(eq(usersTable.id, id))
-      .groupBy(usersTable.id)
-      .limit(1);
-
+    const user = await User.findById(id).lean({ virtuals: true });
     if (!user) throw notFound("User");
 
-    res.json({ data: user });
+    const postCount = await Post.countDocuments({ authorId: user._id });
+
+    res.json({
+      data: {
+        ...user,
+        id: user._id.toString(),
+        _id: undefined,
+        __v: undefined,
+        postCount,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -134,8 +113,8 @@ router.get("/users/:id", async (req: Request, res: Response, next: NextFunction)
 
 router.put("/users/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid user ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid user ID");
 
     const parsed = updateUserSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -146,51 +125,25 @@ router.put("/users/:id", async (req: Request, res: Response, next: NextFunction)
       throw badRequest("Validation failed", details);
     }
 
-    const existing = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.id, id))
-      .limit(1);
+    const updated = await User.findByIdAndUpdate(
+      id,
+      { $set: parsed.data },
+      { new: true, runValidators: true }
+    ).lean({ virtuals: true });
 
-    if (existing.length === 0) throw notFound("User");
+    if (!updated) throw notFound("User");
 
-    const updates: Partial<typeof usersTable.$inferInsert> = {
-      updatedAt: new Date(),
-    };
+    const postCount = await Post.countDocuments({ authorId: updated._id });
 
-    if (parsed.data.name !== undefined) updates.name = parsed.data.name;
-    if (parsed.data.email !== undefined) updates.email = parsed.data.email.toLowerCase();
-    if (parsed.data.role !== undefined) updates.role = parsed.data.role;
-    if (parsed.data.bio !== undefined) updates.bio = parsed.data.bio;
-    if (parsed.data.avatarUrl !== undefined) updates.avatarUrl = parsed.data.avatarUrl;
-    if (parsed.data.isActive !== undefined) updates.isActive = parsed.data.isActive;
-
-    const [updated] = await db
-      .update(usersTable)
-      .set(updates)
-      .where(eq(usersTable.id, id))
-      .returning();
-
-    const [withCount] = await db
-      .select({
-        id: usersTable.id,
-        name: usersTable.name,
-        email: usersTable.email,
-        role: usersTable.role,
-        bio: usersTable.bio,
-        avatarUrl: usersTable.avatarUrl,
-        isActive: usersTable.isActive,
-        createdAt: usersTable.createdAt,
-        updatedAt: usersTable.updatedAt,
-        postCount: sql<number>`CAST(COUNT(${postsTable.id}) AS INTEGER)`,
-      })
-      .from(usersTable)
-      .leftJoin(postsTable, eq(postsTable.authorId, usersTable.id))
-      .where(eq(usersTable.id, updated!.id))
-      .groupBy(usersTable.id)
-      .limit(1);
-
-    res.json({ data: withCount });
+    res.json({
+      data: {
+        ...updated,
+        id: updated._id.toString(),
+        _id: undefined,
+        __v: undefined,
+        postCount,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -198,21 +151,16 @@ router.put("/users/:id", async (req: Request, res: Response, next: NextFunction)
 
 router.delete("/users/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid user ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid user ID");
 
-    const existing = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.id, id))
-      .limit(1);
+    const user = await User.findByIdAndUpdate(
+      id,
+      { $set: { isActive: false } },
+      { new: true }
+    );
 
-    if (existing.length === 0) throw notFound("User");
-
-    await db
-      .update(usersTable)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(usersTable.id, id));
+    if (!user) throw notFound("User");
 
     res.json({ message: "User successfully deactivated" });
   } catch (err) {
@@ -222,59 +170,36 @@ router.delete("/users/:id", async (req: Request, res: Response, next: NextFuncti
 
 router.get("/users/:id/posts", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseInt(req.params["id"]!, 10);
-    if (isNaN(id)) throw badRequest("Invalid user ID");
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) throw badRequest("Invalid user ID");
 
-    const userExists = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.id, id))
-      .limit(1);
-
-    if (userExists.length === 0) throw notFound("User");
+    const user = await User.findById(id).lean();
+    if (!user) throw notFound("User");
 
     const { page, limit, offset } = parsePagination(req);
 
-    const [totalResult, posts] = await Promise.all([
-      db.select({ count: count() }).from(postsTable).where(eq(postsTable.authorId, id)),
-      db
-        .select({
-          id: postsTable.id,
-          title: postsTable.title,
-          slug: postsTable.slug,
-          content: postsTable.content,
-          excerpt: postsTable.excerpt,
-          status: postsTable.status,
-          category: postsTable.category,
-          tags: postsTable.tags,
-          viewCount: postsTable.viewCount,
-          authorId: postsTable.authorId,
-          createdAt: postsTable.createdAt,
-          updatedAt: postsTable.updatedAt,
-          commentCount: sql<number>`CAST(0 AS INTEGER)`,
-          author: {
-            id: usersTable.id,
-            name: usersTable.name,
-            email: usersTable.email,
-            role: usersTable.role,
-            bio: usersTable.bio,
-            avatarUrl: usersTable.avatarUrl,
-            isActive: usersTable.isActive,
-            postCount: sql<number>`CAST(0 AS INTEGER)`,
-            createdAt: usersTable.createdAt,
-            updatedAt: usersTable.updatedAt,
-          },
-        })
-        .from(postsTable)
-        .leftJoin(usersTable, eq(postsTable.authorId, usersTable.id))
-        .where(eq(postsTable.authorId, id))
-        .orderBy(sql`${postsTable.createdAt} DESC`)
+    const filter = { authorId: user._id };
+
+    const [total, posts] = await Promise.all([
+      Post.countDocuments(filter),
+      Post.find(filter)
+        .populate("authorId", "name email role bio avatarUrl isActive createdAt updatedAt")
+        .sort({ createdAt: -1 })
+        .skip(offset)
         .limit(limit)
-        .offset(offset),
+        .lean({ virtuals: true }),
     ]);
 
-    const total = totalResult[0]?.count ?? 0;
-    res.json({ data: posts, meta: buildMeta(total, page, limit) });
+    const data = posts.map((p) => ({
+      ...p,
+      id: p._id.toString(),
+      _id: undefined,
+      __v: undefined,
+      authorId: (p.authorId as unknown as mongoose.Types.ObjectId)?.toString?.() ?? p.authorId,
+      commentCount: 0,
+    }));
+
+    res.json({ data, meta: buildMeta(total, page, limit) });
   } catch (err) {
     next(err);
   }
