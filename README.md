@@ -1,25 +1,23 @@
 # Aryan REST API
 
-A simple REST API built with Node.js, Express, and MongoDB.
+A RESTful API built with Node.js, Express, and MongoDB.
 
 ## Tech Stack
-
 - Node.js
 - Express.js
 - MongoDB
 - Mongoose
-- Railway Deployment
+- Railway (Deployment)
 
 ## Features
+- User CRUD API
+- MongoDB integration
+- REST architecture
+- Deployed backend
 
-- Express server setup
-- MongoDB connection
-- Environment variables support
-- Deployed on Railway
+## API Endpoints
 
-## API Endpoint
-
-GET /
-
-Response:
-Aryan REST API running 🚀
+GET /api/users  
+POST /api/users  
+PUT /api/users/:id  
+DELETE /api/users/:id
