@@ -7,8 +7,10 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
-}
+export type UserRole = (typeof UserRole)[keyof typeof UserRole];
+
+export const UserRole = {
+  admin: "admin",
+  user: "user",
+  moderator: "moderator",
+} as const;

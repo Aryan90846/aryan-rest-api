@@ -7,8 +7,11 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
-}
+export type UpdatePostBodyStatus =
+  (typeof UpdatePostBodyStatus)[keyof typeof UpdatePostBodyStatus];
+
+export const UpdatePostBodyStatus = {
+  draft: "draft",
+  published: "published",
+  archived: "archived",
+} as const;

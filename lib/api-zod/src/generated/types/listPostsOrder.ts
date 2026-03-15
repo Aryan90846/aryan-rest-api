@@ -7,8 +7,10 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
-}
+export type ListPostsOrder =
+  (typeof ListPostsOrder)[keyof typeof ListPostsOrder];
+
+export const ListPostsOrder = {
+  asc: "asc",
+  desc: "desc",
+} as const;

@@ -6,9 +6,14 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { User } from "./user";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface Comment {
+  id: number;
+  content: string;
+  postId: number;
+  authorId: number;
+  author?: User | null;
+  createdAt: Date;
+  updatedAt: Date;
 }

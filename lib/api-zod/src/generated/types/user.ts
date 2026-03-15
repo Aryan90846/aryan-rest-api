@@ -6,9 +6,17 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { UserRole } from "./userRole";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface User {
+  id: number;
+  name: string;
+  email: string;
+  role: UserRole;
+  bio?: string | null;
+  avatarUrl?: string | null;
+  isActive: boolean;
+  postCount: number;
+  createdAt: Date;
+  updatedAt: Date;
 }

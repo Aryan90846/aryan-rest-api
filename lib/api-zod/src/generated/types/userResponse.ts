@@ -6,9 +6,8 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { User } from "./user";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface UserResponse {
+  data: User;
 }

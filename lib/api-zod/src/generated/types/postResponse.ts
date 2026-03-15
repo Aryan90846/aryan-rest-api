@@ -6,9 +6,8 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { Post } from "./post";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface PostResponse {
+  data: Post;
 }

@@ -7,8 +7,12 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
-}
+export type ListPostsSortBy =
+  (typeof ListPostsSortBy)[keyof typeof ListPostsSortBy];
+
+export const ListPostsSortBy = {
+  createdAt: "createdAt",
+  updatedAt: "updatedAt",
+  title: "title",
+  viewCount: "viewCount",
+} as const;

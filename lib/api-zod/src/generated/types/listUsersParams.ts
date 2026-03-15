@@ -6,9 +6,14 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { ListUsersRole } from "./listUsersRole";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
-}
+export type ListUsersParams = {
+  page?: number;
+  limit?: number;
+  /**
+   * Search by name or email
+   */
+  search?: string;
+  role?: ListUsersRole;
+};

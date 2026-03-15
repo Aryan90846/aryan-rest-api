@@ -6,9 +6,8 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { Comment } from "./comment";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface CommentResponse {
+  data: Comment;
 }

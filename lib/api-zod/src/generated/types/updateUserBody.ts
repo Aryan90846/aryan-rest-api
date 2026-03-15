@@ -6,9 +6,18 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { UpdateUserBodyRole } from "./updateUserBodyRole";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface UpdateUserBody {
+  /**
+   * @minLength 2
+   * @maxLength 100
+   */
+  name?: string;
+  email?: string;
+  role?: UpdateUserBodyRole;
+  /** @maxLength 500 */
+  bio?: string;
+  avatarUrl?: string;
+  isActive?: boolean;
 }

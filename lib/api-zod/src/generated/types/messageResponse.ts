@@ -7,8 +7,6 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface MessageResponse {
+  message: string;
 }

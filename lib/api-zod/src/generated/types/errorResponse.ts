@@ -6,9 +6,10 @@
 
  * OpenAPI spec version: 1.0.0
  */
+import type { ErrorResponseDetailsItem } from "./errorResponseDetailsItem";
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface ErrorResponse {
+  error: string;
+  message: string;
+  details?: ErrorResponseDetailsItem[];
 }

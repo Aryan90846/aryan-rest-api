@@ -1,10 +1,10 @@
-# Workspace
+# Backend REST API — Node.js + Express + PostgreSQL
 
-## Overview
+## Project Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+A professional, production-ready REST API backend built with Node.js, Express, and PostgreSQL. Implements full CRUD operations for users, posts, and comments with pagination, search, filtering, sorting, structured error handling, and Zod input validation. Designed with a scalable monorepo architecture.
 
-## Stack
+## Tech Stack
 
 - **Monorepo tool**: pnpm workspaces
 - **Node.js version**: 24
@@ -13,84 +13,119 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API framework**: Express 5
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
+- **API contract**: OpenAPI 3.1 spec + Orval codegen
 - **Build**: esbuild (CJS bundle)
 
-## Structure
+## Architecture
 
 ```text
 artifacts-monorepo/
-├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
-├── lib/                    # Shared libraries
-│   ├── api-spec/           # OpenAPI spec + Orval codegen config
-│   ├── api-client-react/   # Generated React Query hooks
-│   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
-├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
-├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
+├── artifacts/
+│   └── api-server/              # Express REST API server
+│       └── src/
+│           ├── app.ts           # Express app setup + error handler
+│           ├── index.ts         # Entry point (reads PORT, starts server)
+│           ├── lib/
+│           │   ├── errors.ts    # AppError class + error handler middleware
+│           │   ├── pagination.ts # Pagination helpers
+│           │   └── slugify.ts   # URL slug generator
+│           └── routes/
+│               ├── index.ts     # Router registration
+│               ├── health.ts    # GET /api/healthz
+│               ├── users.ts     # CRUD /api/users
+│               ├── posts.ts     # CRUD /api/posts
+│               └── comments.ts  # CRUD /api/posts/:id/comments, /api/comments/:id
+├── lib/
+│   ├── api-spec/openapi.yaml    # OpenAPI 3.1 source of truth
+│   ├── api-zod/                 # Generated Zod validators (from codegen)
+│   ├── api-client-react/        # Generated React Query hooks (from codegen)
+│   └── db/
+│       └── src/schema/
+│           ├── users.ts         # Users table + Zod schemas
+│           ├── posts.ts         # Posts table + Zod schemas
+│           └── comments.ts      # Comments table + Zod schemas
 ```
 
-## TypeScript & Composite Projects
+## API Endpoints
 
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. This means:
+### Health
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/healthz` | Server health + uptime |
 
-- **Always typecheck from the root** — run `pnpm run typecheck` (which runs `tsc --build --emitDeclarationOnly`). This builds the full dependency graph so that cross-package imports resolve correctly. Running `tsc` inside a single package will fail if its dependencies haven't been built yet.
-- **`emitDeclarationOnly`** — we only emit `.d.ts` files during typecheck; actual JS bundling is handled by esbuild/tsx/vite...etc, not `tsc`.
-- **Project references** — when package A depends on package B, A's `tsconfig.json` must list B in its `references` array. `tsc --build` uses this to determine build order and skip up-to-date packages.
+### Users
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/users` | List users (pagination, search, role filter) |
+| POST | `/api/users` | Create user |
+| GET | `/api/users/:id` | Get user by ID (includes post count) |
+| PUT | `/api/users/:id` | Update user |
+| DELETE | `/api/users/:id` | Soft-delete user (sets isActive=false) |
+| GET | `/api/users/:id/posts` | Get all posts by a user |
 
-## Root Scripts
+### Posts
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/posts` | List posts (pagination, search, status/category filter, sort) |
+| POST | `/api/posts` | Create post (auto-generates URL slug) |
+| GET | `/api/posts/:id` | Get post by ID (increments view count) |
+| PUT | `/api/posts/:id` | Update post |
+| DELETE | `/api/posts/:id` | Hard-delete post |
 
-- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
-- `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
+### Comments
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/posts/:id/comments` | Get comments for a post |
+| POST | `/api/posts/:id/comments` | Add comment to post |
+| PUT | `/api/comments/:id` | Update comment |
+| DELETE | `/api/comments/:id` | Delete comment |
 
-## Packages
+## Key Features
 
-### `artifacts/api-server` (`@workspace/api-server`)
+- **Full CRUD** for Users, Posts, Comments
+- **Pagination** on all list endpoints with meta (total, pages, hasNext, hasPrev)
+- **Search** by name/email (users) and title/content (posts)
+- **Filtering** by role, status, category
+- **Sorting** posts by createdAt, updatedAt, title, viewCount (asc/desc)
+- **Input validation** with Zod — returns structured field-level errors
+- **Soft deletes** for users (isActive flag)
+- **Auto slug generation** for posts
+- **View count tracking** on post reads
+- **Relational queries** — posts include author, comments include author
+- **Structured error responses** — consistent `{ error, message, details }` format
+- **Role-based user system** — admin, moderator, user
 
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
+## Database Schema
 
-- Entry: `src/index.ts` — reads `PORT`, starts Express
-- App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
+- **users** — id, name, email (unique), role (enum), bio, avatarUrl, isActive, timestamps
+- **posts** — id, title, slug (unique), content, excerpt, status (enum), category, tags (array), viewCount, authorId (FK), timestamps
+- **comments** — id, content, postId (FK with cascade delete), authorId (FK), timestamps
 
-### `lib/db` (`@workspace/db`)
+## Development
 
-Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client instance and schema models.
+```bash
+# Start the API server
+pnpm --filter @workspace/api-server run dev
 
-- `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
-- `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
-- `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
-- Exports: `.` (pool, db, schema), `./schema` (schema only)
+# Push schema changes to DB
+pnpm --filter @workspace/db run push
 
-Production migrations are handled by Replit when publishing. In development, we just use `pnpm --filter @workspace/db run push`, and we fallback to `pnpm --filter @workspace/db run push-force`.
+# Regenerate API types from OpenAPI spec
+pnpm --filter @workspace/api-spec run codegen
 
-### `lib/api-spec` (`@workspace/api-spec`)
+# Typecheck everything
+pnpm run typecheck
+```
 
-Owns the OpenAPI 3.1 spec (`openapi.yaml`) and the Orval config (`orval.config.ts`). Running codegen produces output into two sibling packages:
+## Query Examples
 
-1. `lib/api-client-react/src/generated/` — React Query hooks + fetch client
-2. `lib/api-zod/src/generated/` — Zod schemas
+```bash
+# List all published posts, sorted by views
+GET /api/posts?status=published&sortBy=viewCount&order=desc
 
-Run codegen: `pnpm --filter @workspace/api-spec run codegen`
+# Search users by name or email
+GET /api/users?search=alice&role=admin
 
-### `lib/api-zod` (`@workspace/api-zod`)
-
-Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used by `api-server` for response validation.
-
-### `lib/api-client-react` (`@workspace/api-client-react`)
-
-Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
-
-### `scripts` (`@workspace/scripts`)
-
-Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+# Paginate comments
+GET /api/posts/1/comments?page=2&limit=20
+```

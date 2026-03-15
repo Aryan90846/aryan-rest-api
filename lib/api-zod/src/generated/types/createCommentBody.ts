@@ -7,8 +7,11 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface HealthStatus {
-  status: string;
-  uptime: number;
-  timestamp: string;
+export interface CreateCommentBody {
+  /**
+   * @minLength 1
+   * @maxLength 1000
+   */
+  content: string;
+  authorId: number;
 }
